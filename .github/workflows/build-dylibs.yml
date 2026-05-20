@@ -1,1 +1,119 @@
+name: Build Universal Dylibs
 
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'dylibs-*'
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install libmtp libusb
+
+      - name: Build arm64 dylibs
+        run: |
+          mkdir -p build/arm64
+          # libusb arm64
+          curl -L https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2 | tar xj
+          cd libusb-1.0.27
+          ./configure --host=aarch64-apple-darwin \
+            CFLAGS="-arch arm64" \
+            LDFLAGS="-arch arm64" \
+            --prefix=$(pwd)/../build/arm64 \
+            --disable-static
+          make -j$(sysctl -n hw.ncpu)
+          make install
+          cd ..
+
+          # libmtp arm64
+          curl -L https://github.com/libmtp/libmtp/releases/download/v1.1.21/libmtp-1.1.21.tar.gz | tar xz
+          cd libmtp-1.1.21
+          ./configure --host=aarch64-apple-darwin \
+            CFLAGS="-arch arm64" \
+            LDFLAGS="-arch arm64 -L$(pwd)/../build/arm64/lib" \
+            CPPFLAGS="-I$(pwd)/../build/arm64/include/libusb-1.0" \
+            --prefix=$(pwd)/../build/arm64 \
+            --disable-static \
+            --with-libusb-prefix=$(pwd)/../build/arm64
+          make -j$(sysctl -n hw.ncpu)
+          make install
+          cd ..
+
+      - name: Build x86_64 dylibs
+        run: |
+          mkdir -p build/x86_64
+          # libusb x86_64
+          cd libusb-1.0.27
+          make distclean
+          ./configure --host=x86_64-apple-darwin \
+            CFLAGS="-arch x86_64" \
+            LDFLAGS="-arch x86_64" \
+            --prefix=$(pwd)/../build/x86_64 \
+            --disable-static
+          make -j$(sysctl -n hw.ncpu)
+          make install
+          cd ..
+
+          # libmtp x86_64
+          cd libmtp-1.1.21
+          make distclean
+          ./configure --host=x86_64-apple-darwin \
+            CFLAGS="-arch x86_64" \
+            LDFLAGS="-arch x86_64 -L$(pwd)/../build/x86_64/lib" \
+            CPPFLAGS="-I$(pwd)/../build/x86_64/include/libusb-1.0" \
+            --prefix=$(pwd)/../build/x86_64 \
+            --disable-static \
+            --with-libusb-prefix=$(pwd)/../build/x86_64
+          make -j$(sysctl -n hw.ncpu)
+          make install
+          cd ..
+
+      - name: Create universal dylibs with lipo
+        run: |
+          mkdir -p build/universal
+          lipo -create \
+            build/arm64/lib/libusb-1.0.0.dylib \
+            build/x86_64/lib/libusb-1.0.0.dylib \
+            -output build/universal/libusb-1.0.0.dylib
+
+          lipo -create \
+            build/arm64/lib/libmtp.9.dylib \
+            build/x86_64/lib/libmtp.9.dylib \
+            -output build/universal/libmtp.9.dylib
+
+          # Verify both are universal
+          lipo -info build/universal/libusb-1.0.0.dylib
+          lipo -info build/universal/libmtp.9.dylib
+
+      - name: Fix install names
+        run: |
+          # Set install names to @rpath so the app bundle can find them
+          install_name_tool -id @rpath/libusb-1.0.0.dylib build/universal/libusb-1.0.0.dylib
+          install_name_tool -id @rpath/libmtp.9.dylib build/universal/libmtp.9.dylib
+
+          # Fix libmtp's reference to libusb
+          install_name_tool \
+            -change $(otool -L build/universal/libmtp.9.dylib | grep libusb | awk '{print $1}') \
+            @rpath/libusb-1.0.0.dylib \
+            build/universal/libmtp.9.dylib
+
+          # Verify
+          otool -L build/universal/libmtp.9.dylib
+          otool -L build/universal/libusb-1.0.0.dylib
+
+      - name: Upload dylibs as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal-dylibs
+          path: |
+            build/universal/libmtp.9.dylib
+            build/universal/libusb-1.0.0.dylib
+          retention-days: 90
