@@ -102,10 +102,10 @@ jobs:
           install_name_tool -id @rpath/libusb-1.0.0.dylib build/universal/libusb-1.0.0.dylib
           install_name_tool -id @rpath/libmtp.9.dylib build/universal/libmtp.9.dylib
 
-          install_name_tool \
-            -change $(otool -L build/universal/libmtp.9.dylib | grep libusb | awk '{print $1}') \
-            @rpath/libusb-1.0.0.dylib \
-            build/universal/libmtp.9.dylib
+          # Get the current libusb reference in libmtp and store it
+          LIBUSB_REF=$(otool -L build/universal/libmtp.9.dylib | grep libusb | awk '{print $1}')
+          echo "Changing libusb reference: $LIBUSB_REF"
+          install_name_tool -change "$LIBUSB_REF" @rpath/libusb-1.0.0.dylib build/universal/libmtp.9.dylib
 
           otool -L build/universal/libmtp.9.dylib
           otool -L build/universal/libusb-1.0.0.dylib
